@@ -1,0 +1,71 @@
+---
+- name: Prepare RHEL 8 and Install GitLab EE from Local Repository
+  hosts: secondary_gitlab_server
+  remote_user: user
+  become: yes
+  become_method: sudo    
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+    - name: Enable required repositories
+      rhsm_repository:
+        name: "{{ item }}"
+        state: enabled
+      loop:
+        - rhel-8-for-x86_64-appstream-rpms
+        - rhel-8-for-x86_64-baseos-rpms
+        - codeready-builder-for-rhel-8-x86_64-rpms
+
+    - name: Set SELinux to permissive mode
+      selinux:
+        state: permissive
+
+    - name: Ensure SELinux is permissive on reboot
+      lineinfile:
+        path: /etc/selinux/config
+        regexp: '^SELINUX='
+        line: 'SELINUX=permissive'
+
+    - name: Ensure required packages are installed
+      package:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - vim
+        - wget
+        - bash-completion
+        - tuned
+        - net-tools
+        - jq
+        - curl
+        - policycoreutils-python-utils
+        - postfix
+
+    - name: Ensure tuned service is enabled and running
+      systemd:
+        name: tuned
+        state: started
+        enabled: yes
+
+    - name: Set the active tuned profile to performance
+      command: tuned-adm profile performance
+
+    - name: Ensure postfix is enabled and running
+      systemd:
+        name: postfix
+        state: started
+        enabled: yes
+
+    - name: Download and install GitLab EE from local HTTP server
+      yum:
+        name: "http://{{ http_server }}/{{ gitlab_rpm }}"
+        state: present
+      register: install_result
+      failed_when: install_result.rc != 0
+
+    - name: Ensure playbook execution status is recorded
+      copy:
+        content: "Playbook executed with status: {{ ansible_play_failed | ternary('FAILED', 'SUCCESS') }}\n"
+        dest: "/path/to/log/file.log"
+        remote_src: no

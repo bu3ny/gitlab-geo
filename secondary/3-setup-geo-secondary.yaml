@@ -1,0 +1,195 @@
+---
+- name: Configure GitLab Geo and Database Settings
+  hosts: secondary_gitlab_server
+  remote_user: user
+  become: yes
+  become_method: sudo    
+  vars_files:
+    - vars/main.yml
+
+  pre_tasks:
+    - name: Obtain GitLab session token
+      uri:
+        url: "https://{{ primary_site_ip }}/api/v4/session"
+        method: POST
+        body:
+          login: "{{ gitlab_username }}"
+          password: "{{ gitlab_password }}"
+        body_format: json
+        headers:
+          Content-Type: "application/json"
+        validate_certs: no
+      register: session_response
+      delegate_to: primary_gitlab_server
+      failed_when: session_response.status != 201
+
+    - name: Set GitLab session token fact
+      set_fact:
+        session_token: "{{ session_response.json.private_token }}"
+      delegate_to: primary_gitlab_server
+
+    - name: Create GitLab personal access token
+      uri:
+        url: "https://{{ primary_site_ip }}/api/v4/personal_access_tokens"
+        method: POST
+        body:
+          name: "{{ gitlab_token_name }}"
+          scopes: "{{ gitlab_token_scopes.split(',') }}"
+        body_format: json
+        headers:
+          Content-Type: "application/json"
+          PRIVATE-TOKEN: "{{ session_token }}"
+        validate_certs: no
+      register: token_response
+      delegate_to: primary_gitlab_server
+      failed_when: token_response.status != 201
+
+    - name: Set GitLab API token fact
+      set_fact:
+        gitlab_api_token: "{{ token_response.json.token }}"
+      delegate_to: primary_gitlab_server
+
+    - name: Read gitlab-secrets.json content
+      slurp:
+        src: /etc/gitlab/gitlab-secrets.json
+      register: gitlab_secrets_content
+      delegate_to: primary_gitlab_server
+
+    - name: Read PostgreSQL certificate content
+      slurp:
+        src: ~gitlab-psql/data/server.crt
+      register: postgres_certificate_content
+      delegate_to: primary_gitlab_server
+
+  tasks:
+    - name: Create gitlab-secrets.json on secondary
+      copy:
+        content: "{{ gitlab_secrets_content.content | b64decode }}"
+        dest: /tmp/gitlab-secrets.json
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Create PostgreSQL certificate on secondary
+      copy:
+        content: "{{ postgres_certificate_content.content | b64decode }}"
+        dest: /tmp/server.crt
+        owner: gitlab-psql
+        group: gitlab-psql
+        mode: '0400'
+
+    - name: Configure GitLab Geo Secondary Role
+      blockinfile:
+        path: /etc/gitlab/gitlab.rb
+        block: |
+          roles(['geo_secondary_role'])
+        marker: "# {mark} ANSIBLE MANAGED BLOCK GEO SECONDARY"
+      notify: reconfigure gitlab
+
+    - name: Configure PostgreSQL for Geo
+      blockinfile:
+        path: /etc/gitlab/gitlab.rb
+        block: |
+          postgresql['listen_address'] = '{{ secondary_site_ip }}'
+          postgresql['md5_auth_cidr_addresses'] = ['{{ secondary_site_ip }}/32']
+          postgresql['sql_replication_password'] = '{{ gitlab_replicator_password_md5 }}'
+          postgresql['sql_user_password'] = '{{ gitlab_db_password_md5 }}'
+          gitlab_rails['db_password'] = '{{ gitlab_db_password }}'
+        marker: "# {mark} ANSIBLE MANAGED BLOCK GEO POSTGRESQL"
+      notify:
+        - reconfigure gitlab
+        - restart postgresql
+
+    - name: Manually replicate secret GitLab values
+      copy:
+        src: /tmp/gitlab-secrets.json
+        dest: /etc/gitlab/gitlab-secrets.json
+        owner: root
+        group: root
+        mode: '0600'
+      notify: reconfigure gitlab
+
+    - name: Replicate the database
+      command: |
+        gitlab-ctl replicate-geo-database \
+        --slot-name={{ geo_secondary_name }} \
+        --host={{ primary_site_ip }} \
+        --sslmode=verify-ca
+
+    - name: Configure OpenSSH for fast lookup
+      blockinfile:
+        path: /etc/ssh/sshd_config
+        block: |
+          Match User git    # Apply the AuthorizedKeysCommands to the git user only
+            AuthorizedKeysCommand /opt/gitlab/embedded/service/gitlab-shell/bin/gitlab-shell-authorized-keys-check git %u %k
+            AuthorizedKeysCommandUser git
+          Match all    # End match, settings apply to all users again
+        marker: "# {mark} ANSIBLE MANAGED BLOCK FAST LOOKUP"
+      notify: restart ssh
+
+    - name: Stop Puma
+      command: gitlab-ctl stop puma
+
+    - name: Stop Sidekiq
+      command: gitlab-ctl stop sidekiq
+
+    - name: Test PostgreSQL connection from the secondary to the primary
+      shell: |
+        sudo -u gitlab-psql /opt/gitlab/embedded/bin/psql \
+        --list \
+        -U gitlab_replicator \
+        -d "dbname=gitlabhq_production sslmode=verify-ca" \
+        -W \
+        -h {{ primary_site_ip }}
+      args:
+        stdin: "{{ gitlab_replicator_password }}"
+      register: psql_test
+      failed_when: "'List of databases' not in psql_test.stdout"
+
+    - name: Configure Geo Node Name
+      lineinfile:
+        path: /etc/gitlab/gitlab.rb
+        line: "gitlab_rails['geo_node_name'] = '{{ geo_secondary_name }}'"
+        create: yes
+      notify: reconfigure gitlab
+
+    - name: Add secondary site to the primary node
+      uri:
+        url: "https://{{ primary_site_ip }}/api/v4/geo/sites"
+        method: POST
+        headers:
+          PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+        body_format: json
+        body:
+          name: "{{ geo_secondary_name }}"
+          url: "{{ gitlab_external_url }}"
+        validate_certs: no
+        status_code: 201
+
+    - name: Check Geo setup on secondary
+      command: gitlab-rake gitlab:geo:check
+      register: geo_check
+      failed_when: "'Check for database replication' not in geo_check.stdout"
+
+    - name: Restart services on secondary node
+      command: gitlab-ctl restart
+
+  handlers:
+    - name: reconfigure gitlab
+      command: gitlab-ctl reconfigure
+
+    - name: restart ssh
+      service:
+        name: sshd
+        state: reloaded
+
+    - name: restart postgresql
+      command: gitlab-ctl restart postgresql
+
+  post_tasks:
+    - name: Ensure playbook execution status is recorded
+      copy:
+        content: "Playbook executed with status: {{ ansible_play_failed | ternary('FAILED', 'SUCCESS') }}\n"
+        dest: "/path/to/log/file.log"
+        remote_src: no
+

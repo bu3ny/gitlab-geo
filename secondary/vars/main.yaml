@@ -1,0 +1,40 @@
+# General Variables
+gitlab_external_url: "http://your-gitlab-url.com"
+primary_site_ip: "primary_site_ip_here"
+secondary_site_ip: "secondary_site_ip_here"
+
+# LDAP Configuration
+ldap_host: "{{ vault_ldap_host }}"
+ldap_bind_dn: "{{ vault_ldap_bind_dn }}"
+ldap_password: "{{ vault_ldap_password }}"
+ldap_base: "{{ ldap_base }}"
+ldap_group_base: "{{ ldap_group_base }}"
+ldap_admin_group: "{{ ldap_admin_group }}"
+
+# SMTP Configuration
+smtp_address: "{{ vault_smtp_address }}"
+smtp_port: "{{ vault_smtp_port }}"
+smtp_user: "{{ vault_smtp_user }}"
+smtp_password: "{{ vault_smtp_password }}"
+
+# Syslog Configuration
+syslog_server: "{{ vault_syslog_server }}"
+
+# Geo Configuration
+geo_secondary_name: "secondary_geo_node_name_here"
+
+# Database Passwords
+gitlab_db_password: "your_db_password_here"
+gitlab_replicator_password: "your_replication_password_here"
+gitlab_db_password_md5: "md5_encoded_db_password_here"
+gitlab_replicator_password_md5: "md5_encoded_replicator_password_here"
+
+# HTTP Server Configuration for GitLab RPM
+http_server: "10.0.0.1"
+gitlab_rpm: "gitlab-ee-17.0.0-ee.0.el8.x86_64.rpm"
+
+# GitLab API Credentials
+gitlab_username: "{{ vault_gitlab_username }}"
+gitlab_password: "{{ vault_gitlab_password }}"
+gitlab_token_name: "GeoSecondarySetup"
+gitlab_token_scopes: "api,read_repository"

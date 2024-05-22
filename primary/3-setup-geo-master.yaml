@@ -1,0 +1,133 @@
+---
+- name: Configure GitLab Geo and Database Settings
+  hosts: primary_gitlab_server
+  remote_user: user
+  become: yes
+  become_method: sudo    
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+    - block:
+        - name: Add Geo Node Name
+          lineinfile:
+            path: /etc/gitlab/gitlab.rb
+            line: "gitlab_rails['geo_node_name'] = '{{ geo_node_name }}'"
+          notify: reconfigure gitlab
+
+        - name: Define the site as the primary Geo site
+          command: gitlab-ctl set-geo-primary-node
+          register: geo_primary_node_result
+          failed_when: geo_primary_node_result.rc != 0
+
+      rescue:
+        - name: Fail the playbook if Geo configuration fails
+          fail:
+            msg: "Geo configuration failed. Please check the logs for details."
+
+    - block:
+        - name: Generate MD5 password for gitlab database user
+          command: "gitlab-ctl pg-password-md5 gitlab"
+          args:
+            stdin: "{{ gitlab_db_password }}"
+          register: gitlab_db_password_md5
+          changed_when: False
+          failed_when: gitlab_db_password_md5.rc != 0
+
+        - name: Generate MD5 password for gitlab replicator user
+          command: "gitlab-ctl pg-password-md5 gitlab_replicator"
+          args:
+            stdin: "{{ gitlab_replicator_password }}"
+          register: gitlab_replicator_password_md5
+          changed_when: False
+          failed_when: gitlab_replicator_password_md5.rc != 0
+
+      rescue:
+        - name: Fail the playbook if password generation fails
+          fail:
+            msg: "Password generation for database users failed. Please check the logs for details."
+
+    - block:
+        - name: Enable Geo Primary Role
+          blockinfile:
+            path: /etc/gitlab/gitlab.rb
+            block: |
+              roles ['geo_primary_role']
+            marker: "# {mark} ANSIBLE MANAGED BLOCK GEO PRIMARY"
+
+        - name: Configure Database Passwords
+          blockinfile:
+            path: /etc/gitlab/gitlab.rb
+            block: |
+              postgresql['sql_user_password'] = '{{ gitlab_db_password_md5.stdout }}'
+              gitlab_rails['db_password'] = '{{ gitlab_db_password }}'
+              postgresql['sql_replication_password'] = '{{ gitlab_replicator_password_md5.stdout }}'
+            marker: "# {mark} ANSIBLE MANAGED BLOCK DB PASSWORDS"
+
+        - name: Configure PostgreSQL for Geo
+          blockinfile:
+            path: /etc/gitlab/gitlab.rb
+            block: |
+              postgresql['listen_address'] = '{{ primary_site_ip }}'
+              postgresql['md5_auth_cidr_addresses'] = ['{{ primary_site_ip }}/32', '{{ secondary_site_ip }}/32']
+            marker: "# {mark} ANSIBLE MANAGED BLOCK GEO POSTGRESQL"
+
+        - name: Disable Automatic Database Migrations
+          lineinfile:
+            path: /etc/gitlab/gitlab.rb
+            line: "gitlab_rails['auto_migrate'] = false"
+          notify:
+            - reconfigure gitlab
+            - restart postgresql
+
+        - name: Enable Automatic Database Migrations
+          lineinfile:
+            path: /etc/gitlab/gitlab.rb
+            line: "gitlab_rails['auto_migrate'] = true"
+          notify: reconfigure gitlab
+
+        - name: Set up fast lookup for GitLab Shell with OpenSSH
+          blockinfile:
+            path: /etc/ssh/sshd_config
+            block: |
+              Match User git
+                AuthorizedKeysCommand /opt/gitlab/embedded/service/gitlab-shell/bin/gitlab-shell-authorized-keys-check git %u %k
+                AuthorizedKeysCommandUser git
+              Match all
+            marker: "# {mark} ANSIBLE MANAGED BLOCK FAST LOOKUP"
+          notify: restart ssh
+
+      rescue:
+        - name: Fail the playbook if fast lookup configuration fails
+          fail:
+            msg: "Fast lookup configuration failed. Please check the logs for details."
+
+    - name: Verify PostgreSQL Listening on Port 5432
+      shell: netstat -plnt | grep 5432
+      register: postgres_listen
+      failed_when: "'5432' not in postgres_listen.stdout"
+      changed_when: False
+
+    - name: Record playbook execution status
+      block:
+        - name: Set playbook execution status
+          set_fact:
+            playbook_status: "{{ ansible_play_failed | ternary('FAILED', 'SUCCESS') }}"
+
+        - name: Save playbook execution status to a file
+          copy:
+            content: "Playbook executed with status: {{ playbook_status }}\n"
+            dest: "/path/to/log/file.log"
+
+  handlers:
+    - name: reconfigure gitlab
+      command: gitlab-ctl reconfigure
+
+    - name: restart postgresql
+      command: gitlab-ctl restart postgresql
+
+    - name: restart ssh
+      service:
+        name: sshd
+        state: restarted
+

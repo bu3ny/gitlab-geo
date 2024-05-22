@@ -1,0 +1,4 @@
+[primary_gitlab_server]
+10.0.0.1
+[secondary_gitlab_server]
+10.0.0.2
