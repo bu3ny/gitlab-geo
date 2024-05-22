@@ -64,8 +64,6 @@
                   lowercase_usernames: false
                   block_auto_created_users: false
                   base: "{{ ldap_base }}"
-                  group_base: "{{ ldap_group_base }}"
-                  admin_group: "{{ ldap_admin_group }}"
                   sync_ssh_keys: false
               ')
             marker: "# {mark} ANSIBLE MANAGED BLOCK LDAP"
