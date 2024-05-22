@@ -17,6 +17,12 @@
             line: "# \\0"
             state: present
 
+        - name: Comment out any existing external_url lines
+          lineinfile:
+            path: /etc/gitlab/gitlab.rb
+            regexp: "^external_url"
+            line: "# \\0"
+            state: present
           
         - name: Set GitLab initial root password
           blockinfile:
