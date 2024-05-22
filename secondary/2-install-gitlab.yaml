@@ -70,14 +70,6 @@
               ')
             marker: "# {mark} ANSIBLE MANAGED BLOCK LDAP"
 
-        - name: Configure GitLab Syslog
-          blockinfile:
-            path: /etc/gitlab/gitlab.rb
-            block: |
-              logging['udp_remote_port'] = 514
-              logging['udp_remote_host'] = '{{ syslog_server }}'
-              logging['udp'] = true
-            marker: "# {mark} ANSIBLE MANAGED BLOCK SYSLOG"
 
       notify: reconfigure gitlab
 
