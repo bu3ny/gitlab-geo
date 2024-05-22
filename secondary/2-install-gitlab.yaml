@@ -8,87 +8,79 @@
     - vars/main.yml
 
   tasks:
+    - block:
 
-    - name: Set GitLab initial root password
-      blockinfile:
-        path: /etc/gitlab/gitlab.rb
-        block: |
-          gitlab_rails['initial_root_password'] = '{{ gitlab_password }}'
-        marker: "# {mark} ANSIBLE MANAGED BLOCK ROOT PASSWORD"
-
-    - name: Configure GitLab settings
-      block:
-        - name: Configure GitLab's external URL
-          lineinfile:
-            path: /etc/gitlab/gitlab.rb
-            line: "external_url '{{ gitlab_external_url }}'"
-
-        - name: Configure GitLab SMTP
+        - name: Set GitLab initial root password
           blockinfile:
             path: /etc/gitlab/gitlab.rb
             block: |
-              gitlab_rails['smtp_enable'] = true
-              gitlab_rails['smtp_address'] = '{{ smtp_address }}'
-              gitlab_rails['smtp_port'] = {{ smtp_port }}
-              gitlab_rails['smtp_enable_starttls_auto'] = true
-            marker: "# {mark} ANSIBLE MANAGED BLOCK SMTP"
+              gitlab_rails['initial_root_password'] = '{{ gitlab_password }}'
+            marker: "# {mark} ANSIBLE MANAGED BLOCK ROOT PASSWORD"
 
-        - name: Configure GitLab LDAP
-          blockinfile:
-            path: /etc/gitlab/gitlab.rb
-            block: |
-              gitlab_rails['ldap_enabled'] = true
-              gitlab_rails['ldap_servers'] = YAML.load('
-                main:
-                  label: "Active Directory"
-                  host: "{{ ldap_host }}"
-                  port: 389
-                  uid: "sAMAccountName"
-                  bind_dn: "{{ ldap_bind_dn }}"
-                  password: "{{ ldap_password }}"
-                  encryption: "plain" # "start_tls" or "simple_tls" or "plain"
-                  verify_certificates: false
-                  smartcard_auth: false
-                  active_directory: true
-                  allow_username_or_email_login: false
-                  lowercase_usernames: false
-                  block_auto_created_users: false
-                  base: "{{ ldap_base }}"
-                  group_base: "{{ ldap_group_base }}"
-                  admin_group: "{{ ldap_admin_group }}"
-                  sync_ssh_keys: false
-              ')
-            marker: "# {mark} ANSIBLE MANAGED BLOCK LDAP"
+        - name: Configure GitLab settings
+          block:
+            - name: Configure GitLab's external URL
+              lineinfile:
+                path: /etc/gitlab/gitlab.rb
+                line: "external_url '{{ gitlab_external_url }}'"
 
+            - name: Configure GitLab SMTP
+              blockinfile:
+                path: /etc/gitlab/gitlab.rb
+                block: |
+                  gitlab_rails['smtp_enable'] = true
+                  gitlab_rails['smtp_address'] = '{{ smtp_address }}'
+                  gitlab_rails['smtp_port'] = {{ smtp_port }}
+                  gitlab_rails['smtp_enable_starttls_auto'] = true
+                marker: "# {mark} ANSIBLE MANAGED BLOCK SMTP"
 
-      notify: reconfigure gitlab
+            - name: Configure GitLab LDAP
+              blockinfile:
+                path: /etc/gitlab/gitlab.rb
+                block: |
+                  gitlab_rails['ldap_enabled'] = true
+                  gitlab_rails['ldap_servers'] = YAML.load('
+                    main:
+                      label: "Active Directory"
+                      host: "{{ ldap_host }}"
+                      port: 389
+                      uid: "sAMAccountName"
+                      bind_dn: "{{ ldap_bind_dn }}"
+                      password: "{{ ldap_password }}"
+                      encryption: "plain" # "start_tls" or "simple_tls" or "plain"
+                      verify_certificates: false
+                      smartcard_auth: false
+                      active_directory: true
+                      allow_username_or_email_login: false
+                      lowercase_usernames: false
+                      block_auto_created_users: false
+                      base: "{{ ldap_base }}"
+                      sync_ssh_keys: false
+                  ')
+                marker: "# {mark} ANSIBLE MANAGED BLOCK LDAP"
+
+          notify: reconfigure gitlab
+
+      rescue:
+        - name: Set playbook status to FAILED
+          set_fact:
+            playbook_status: "FAILED"
+
+        - name: Report failure
+          debug:
+            msg: "An error occurred. Task details: {{ ansible_failed_task }}"
+
+      always:
+        - name: Set playbook status to SUCCESS if not already set
+          set_fact:
+            playbook_status: "{{ playbook_status | default('SUCCESS') }}"
+
+        - name: Ensure playbook execution status is recorded
+          copy:
+            content: "Playbook executed with status: {{ playbook_status }}\n"
+            dest: "/tmp/configure_gitlab.log"
+            remote_src: no
 
   handlers:
     - name: reconfigure gitlab
       command: gitlab-ctl reconfigure
-
-  post_tasks:
-    - name: Set playbook status to SUCCESS
-      set_fact:
-        playbook_status: "SUCCESS"
-
-    - name: Ensure playbook execution status is recorded
-      copy:
-        content: "Playbook executed with status: {{ playbook_status }}\n"
-        dest: "/tmp/configure_gitlab.log"
-        remote_src: no
-
-  rescue:
-    - name: Set playbook status to FAILED
-      set_fact:
-        playbook_status: "FAILED"
-
-    - name: Report failure
-      debug:
-        msg: "An error occurred. Task details: {{ ansible_failed_task }}"
-
-    - name: Ensure playbook execution status is recorded
-      copy:
-        content: "Playbook executed with status: {{ playbook_status }}\n"
-        dest: "/tmp/configure_gitlab.log"
-        remote_src: no
