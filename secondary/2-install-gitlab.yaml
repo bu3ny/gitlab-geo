@@ -3,27 +3,17 @@
   hosts: secondary_gitlab_server
   remote_user: user
   become: yes
-  become_method: sudo    
+  become_method: sudo
   vars_files:
     - vars/main.yml
 
   tasks:
-    - name: Configure firewall for HTTP, HTTPS, and PostgreSQL
-      firewalld:
-        service: "{{ item }}"
-        permanent: true
-        state: enabled
-        immediate: yes
-      loop:
-        - http
-        - https
-        - postgresql
 
     - name: Set GitLab initial root password
       blockinfile:
         path: /etc/gitlab/gitlab.rb
         block: |
-          gitlab_rails['initial_root_password'] = '{{ gitlab_admin_password }}'
+          gitlab_rails['initial_root_password'] = '{{ gitlab_password }}'
         marker: "# {mark} ANSIBLE MANAGED BLOCK ROOT PASSWORD"
 
     - name: Configure GitLab settings
@@ -64,6 +54,8 @@
                   lowercase_usernames: false
                   block_auto_created_users: false
                   base: "{{ ldap_base }}"
+                  group_base: "{{ ldap_group_base }}"
+                  admin_group: "{{ ldap_admin_group }}"
                   sync_ssh_keys: false
               ')
             marker: "# {mark} ANSIBLE MANAGED BLOCK LDAP"
@@ -71,12 +63,32 @@
 
       notify: reconfigure gitlab
 
-    - name: Ensure playbook execution status is recorded
-      copy:
-        content: "Playbook executed with status: {{ ansible_play_failed | ternary('FAILED', 'SUCCESS') }}\n"
-        dest: "/path/to/log/file.log"
-        remote_src: no
-
   handlers:
     - name: reconfigure gitlab
       command: gitlab-ctl reconfigure
+
+  post_tasks:
+    - name: Set playbook status to SUCCESS
+      set_fact:
+        playbook_status: "SUCCESS"
+
+    - name: Ensure playbook execution status is recorded
+      copy:
+        content: "Playbook executed with status: {{ playbook_status }}\n"
+        dest: "/tmp/configure_gitlab.log"
+        remote_src: no
+
+  rescue:
+    - name: Set playbook status to FAILED
+      set_fact:
+        playbook_status: "FAILED"
+
+    - name: Report failure
+      debug:
+        msg: "An error occurred. Task details: {{ ansible_failed_task }}"
+
+    - name: Ensure playbook execution status is recorded
+      copy:
+        content: "Playbook executed with status: {{ playbook_status }}\n"
+        dest: "/tmp/configure_gitlab.log"
+        remote_src: no
