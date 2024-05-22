@@ -1,7 +1,9 @@
 ---
 - name: Prepare RHEL 8 and Install GitLab EE from Local Repository
   hosts: all
+  remote_user: user
   become: yes
+  become_method: sudo  
   vars_files:
     - vars/main.yml
 
