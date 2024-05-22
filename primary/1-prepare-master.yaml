@@ -1,27 +1,15 @@
 ---
 - name: Prepare RHEL 8 and Install GitLab EE from Local Repository
-  hosts: primary_gitlab_server
-  remote_user: user
+  hosts: all
   become: yes
-  become_method: sudo    
   vars_files:
     - vars/main.yml
 
   tasks:
     - block:
-        - name: Enable required repositories
-          rhsm_repository:
-            name: "{{ item }}"
-            state: enabled
-          loop:
-            - rhel-8-for-x86_64-appstream-rpms
-            - rhel-8-for-x86_64-baseos-rpms
-            - codeready-builder-for-rhel-8-x86_64-rpms
-          register: repo_result
-          failed_when: "'failed' in repo_result.results | map(attribute='msg')"
-
         - name: Set SELinux to permissive mode
           selinux:
+            policy: targeted
             state: permissive
 
         - name: Ensure SELinux is permissive on reboot
@@ -51,14 +39,24 @@
             state: started
             enabled: yes
 
-        - name: Set the active tuned profile to throughput-performance
-          command: tuned-adm profile throughput-performance
+        - name: Set the active tuned profile to performance
+          command: tuned-adm profile performance
 
         - name: Ensure postfix is enabled and running
           systemd:
             name: postfix
             state: started
             enabled: yes
+
+        - name: Configure Postfix to use all network interfaces
+          lineinfile:
+            path: /etc/postfix/main.cf
+            regexp: '^inet_interfaces ='
+            line: 'inet_interfaces = all'
+            create: yes
+
+        - name: Reload Postfix to apply configuration changes
+          command: systemctl reload postfix
 
         - name: Download and install GitLab EE from local HTTP server
           get_url:
@@ -71,6 +69,7 @@
           yum:
             name: "/tmp/{{ gitlab_rpm }}"
             state: present
+            disable_gpg_check: yes
           register: install_result
           failed_when: install_result.rc != 0
 
@@ -81,6 +80,10 @@
           when: install_result.rc == 0
 
       rescue:
+        - name: Set playbook status to FAILED
+          set_fact:
+            playbook_status: "FAILED"
+
         - name: Report failure
           debug:
             msg: "An error occurred. Task details: {{ ansible_failed_task }}"
@@ -92,6 +95,10 @@
       always:
         - name: Ensure playbook execution status is recorded
           copy:
-            content: "Playbook executed with status: {{ ansible_play_failed | ternary('FAILED', 'SUCCESS') }}\n"
-            dest: "/path/to/log/file.log"
+            content: "Playbook executed with status: {{ playbook_status | default('SUCCESS') }}\n"
+            dest: "/tmp/prepare-master.log"
             remote_src: no
+
+        - name: Set playbook status to SUCCESS if not already set
+          set_fact:
+            playbook_status: "{{ playbook_status | default('SUCCESS') }}"
