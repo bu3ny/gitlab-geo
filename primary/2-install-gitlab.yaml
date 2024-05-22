@@ -74,6 +74,8 @@
               }
             marker: "# {mark} ANSIBLE MANAGED BLOCK LDAP"
 
+      notify: reconfigure gitlab
+
       rescue:
         - name: Set playbook status to FAILED
           set_fact:
@@ -96,4 +98,4 @@
 
   handlers:
     - name: reconfigure gitlab
-      command: gitlab-ctl reconfigure    
+      command: gitlab-ctl reconfigure
