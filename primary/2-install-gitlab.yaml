@@ -1,6 +1,6 @@
 ---
 - name: Configure GitLab and Related Services
-  hosts: secondary_gitlab_server
+  hosts: primary_gitlab_server
   remote_user: user
   become: yes
   become_method: sudo
