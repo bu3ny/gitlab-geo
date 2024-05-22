@@ -58,11 +58,24 @@
         enabled: yes
 
     - name: Download and install GitLab EE from local HTTP server
+      get_url:
+        url: "https://{{ http_server }}/{{ gitlab_rpm }}"
+        dest: "/tmp/{{ gitlab_rpm }}"
+        validate_certs: no
+      register: download_result
+
+    - name: Install GitLab EE from downloaded RPM
       yum:
-        name: "http://{{ http_server }}/{{ gitlab_rpm }}"
+        name: "/tmp/{{ gitlab_rpm }}"
         state: present
       register: install_result
       failed_when: install_result.rc != 0
+
+    - name: Clean up downloaded RPM file
+      file:
+        path: "/tmp/{{ gitlab_rpm }}"
+        state: absent
+      when: install_result.rc == 0
 
     - name: Ensure playbook execution status is recorded
       copy:
