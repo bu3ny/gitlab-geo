@@ -1,102 +1,99 @@
 ---
 - name: Configure GitLab and Related Services
-  hosts: primary_gitlab_server
+  hosts: secondary_gitlab_server
   remote_user: user
   become: yes
-  become_method: sudo    
+  become_method: sudo
   vars_files:
     - vars/main.yml
 
   tasks:
     - block:
-        - name: Configure firewall for HTTP, HTTPS, and PostgreSQL
-          block:
-            - name: Enable HTTP and HTTPS services in the firewall
-              firewalld:
-                service: "{{ item }}"
-                permanent: true
-                state: enabled
-                immediate: yes
-              loop:
-                - http
-                - https
-                - postgresql
-              register: firewall_result
-              failed_when: firewall_result.failed
+        - name: Comment out any existing gitlab_rails['initial_root_password'] lines
+          lineinfile:
+            path: /etc/gitlab/gitlab.rb
+            regexp: "^gitlab_rails\\['initial_root_password'\\]"
+            line: "# \\0"
+            state: present
 
-          rescue:
-            - name: Fail the playbook if firewall configuration fails
-              fail:
-                msg: "Firewall configuration failed. Please check the logs for details."
+        - name: Remove any existing external_url lines
+          command: sed -i '/^external_url/d' /etc/gitlab/gitlab.rb
 
-    - block:
         - name: Set GitLab initial root password
+          lineinfile:
+            path: /etc/gitlab/gitlab.rb
+            line: "gitlab_rails['initial_root_password'] = '{{ gitlab_password }}'"
+            create: yes
+
+        - name: Configure GitLab's external URL
+          lineinfile:
+            path: /etc/gitlab/gitlab.rb
+            line: "external_url '{{ gitlab_external_url }}'"
+            create: yes
+
+        - name: Configure GitLab License File
           blockinfile:
             path: /etc/gitlab/gitlab.rb
             block: |
-              gitlab_rails['initial_root_password'] = '{{ gitlab_admin_password }}'
-            marker: "# {mark} ANSIBLE MANAGED BLOCK ROOT PASSWORD"
+              gitlab_rails['initial_license_file'] = '{{ gitlab_license_file_path }}'
+            marker: "# {mark} ANSIBLE MANAGED BLOCK LICENSE"
 
-        - name: Configure GitLab settings
-          block:
-            - name: Configure GitLab's external URL
-              lineinfile:
-                path: /etc/gitlab/gitlab.rb
-                line: "external_url '{{ gitlab_external_url }}'"
+        - name: Configure GitLab SMTP
+          blockinfile:
+            path: /etc/gitlab/gitlab.rb
+            block: |
+              gitlab_rails['smtp_enable'] = true
+              gitlab_rails['smtp_address'] = '{{ smtp_address }}'
+              gitlab_rails['smtp_port'] = {{ smtp_port }}
+              gitlab_rails['smtp_enable_starttls_auto'] = true
+            marker: "# {mark} ANSIBLE MANAGED BLOCK SMTP"
 
-            - name: Configure GitLab License File
-              blockinfile:
-                path: /etc/gitlab/gitlab.rb
-                block: |
-                  gitlab_rails['initial_license_file'] = '{{ gitlab_license_file_path }}'
-                marker: "# {mark} ANSIBLE MANAGED BLOCK LICENSE"
-
-            - name: Configure GitLab SMTP
-              blockinfile:
-                path: /etc/gitlab/gitlab.rb
-                block: |
-                  gitlab_rails['smtp_enable'] = true
-                  gitlab_rails['smtp_address'] = '{{ smtp_address }}'
-                  gitlab_rails['smtp_port'] = {{ smtp_port }}
-                  gitlab_rails['smtp_enable_starttls_auto'] = true
-                marker: "# {mark} ANSIBLE MANAGED BLOCK SMTP"
-
-            - name: Configure GitLab LDAP
-              blockinfile:
-                path: /etc/gitlab/gitlab.rb
-                block: |
-                  gitlab_rails['ldap_enabled'] = true
-                  gitlab_rails['ldap_servers'] = YAML.load('
-                    main:
-                      label: "Active Directory"
-                      host: "{{ ldap_host }}"
-                      port: 389
-                      uid: "sAMAccountName"
-                      bind_dn: "{{ ldap_bind_dn }}"
-                      password: "{{ ldap_password }}"
-                      encryption: "plain" # "start_tls" or "simple_tls" or "plain"
-                      verify_certificates: false
-                      smartcard_auth: false
-                      active_directory: true
-                      allow_username_or_email_login: false
-                      lowercase_usernames: false
-                      block_auto_created_users: false
-                      base: "{{ ldap_base }}"
-                      sync_ssh_keys: false
-                  ')
-                marker: "# {mark} ANSIBLE MANAGED BLOCK LDAP"
-
-          notify: reconfigure gitlab
+        - name: Configure GitLab LDAP
+          blockinfile:
+            path: /etc/gitlab/gitlab.rb
+            block: |
+              gitlab_rails['ldap_enabled'] = true
+              gitlab_rails['ldap_servers'] = {
+                'main' => {
+                  'label' => 'LDAP',
+                  'host' => '{{ ldap_host }}',
+                  'port' => 389,
+                  'uid' => 'sAMAccountName',
+                  'bind_dn' => '{{ ldap_bind_dn }}',
+                  'password' => '{{ ldap_password }}',
+                  'encryption' => 'plain',
+                  'verify_certificates' => false,
+                  'timeout' => 20,
+                  'active_directory' => true,
+                  'base' => '{{ ldap_base }}',
+                  'lowercase_usernames' => true,
+                  'retry_empty_result_with_codes' => [80],
+                  'allow_username_or_email_login' => true,
+                  'block_auto_created_users' => false
+                }
+              }
+            marker: "# {mark} ANSIBLE MANAGED BLOCK LDAP"
 
       rescue:
-        - name: Fail the playbook if GitLab configuration fails
-          fail:
-            msg: "GitLab configuration failed. Please check the logs for details."
+        - name: Set playbook status to FAILED
+          set_fact:
+            playbook_status: "FAILED"
 
-    - block:
+        - name: Report failure
+          debug:
+            msg: "An error occurred. Task details: {{ ansible_failed_task }}"
+
+      always:
+        - name: Set playbook status to SUCCESS if not already set
+          set_fact:
+            playbook_status: "{{ playbook_status | default('SUCCESS') }}"
+
         - name: Ensure playbook execution status is recorded
           copy:
-            content: "Playbook executed with status: {{ ansible_play_failed | ternary('FAILED', 'SUCCESS') }}\n"
-            dest: "/path/to/log/file.log"
+            content: "Playbook executed with status: {{ playbook_status }}\n"
+            dest: "/tmp/configure_gitlab.log"
             remote_src: no
 
+  handlers:
+    - name: reconfigure gitlab
+      command: gitlab-ctl reconfigure    
