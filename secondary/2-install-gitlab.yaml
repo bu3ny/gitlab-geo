@@ -10,6 +10,14 @@
   tasks:
     - block:
 
+        - name: Comment out any existing gitlab_rails['initial_root_password'] lines
+          lineinfile:
+            path: /etc/gitlab/gitlab.rb
+            regexp: "^gitlab_rails\\['initial_root_password'\\]"
+            line: "# \\0"
+            state: present
+
+          
         - name: Set GitLab initial root password
           blockinfile:
             path: /etc/gitlab/gitlab.rb
