@@ -33,4 +33,4 @@ http_server: "10.0.0.1"
 gitlab_rpm: "gitlab-ee-17.0.0-ee.0.el8.x86_64.rpm"
 
 # Admin Password
-gitlab_admin_password: "your_admin_password_here"
+gitlab_password: "your_admin_password_here"
