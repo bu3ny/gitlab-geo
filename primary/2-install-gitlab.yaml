@@ -1,13 +1,52 @@
 ---
 - name: Configure GitLab and Related Services
   hosts: primary_gitlab_server
-  remote_user: user
+  remote_user: mostafa
   become: yes
   become_method: sudo
   vars_files:
     - vars/main.yml
 
   tasks:
+    - name: Check if GitLab configuration file exists
+      stat:
+        path: /etc/gitlab/gitlab.rb
+      register: gitlab_rb
+
+    - name: Fail if GitLab configuration file does not exist
+      fail:
+        msg: "/etc/gitlab/gitlab.rb does not exist. Please ensure GitLab is installed and configured correctly."
+      when: not gitlab_rb.stat.exists
+
+    - name: Ensure gitlab_password variable is defined
+      fail:
+        msg: "gitlab_password variable is not defined. Please set this variable in your vars file."
+      when: gitlab_password is not defined
+
+    - name: Validate GitLab password complexity
+      assert:
+        that:
+          - gitlab_password is match("(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[!@#\$%^&*]).{12,}")
+        fail_msg: "gitlab_password does not meet complexity requirements. It should contain at least one lowercase letter, one uppercase letter, one digit, one special character, and be at least 12 characters long."
+
+    - name: Ensure gitlab_external_url variable is defined
+      fail:
+        msg: "gitlab_external_url variable is not defined. Please set this variable in your vars file."
+      when: gitlab_external_url is not defined
+
+    - name: Validate GitLab external URL
+      assert:
+        that:
+          - gitlab_external_url is url
+        fail_msg: "gitlab_external_url is not a valid URL."
+
+    - name: Copy GitLab license file to /etc/gitlab
+      copy:
+        src: "{{ gitlab_license_file_path }}"
+        dest: /etc/gitlab/license
+        mode: '0644'
+      when: gitlab_license_file_path is defined and gitlab_license_file_path != ""
+
     - block:
         - name: Comment out any existing gitlab_rails['initial_root_password'] lines
           lineinfile:
@@ -18,6 +57,7 @@
 
         - name: Remove any existing external_url lines
           command: sed -i '/^external_url/d' /etc/gitlab/gitlab.rb
+          register: remove_external_url
 
         - name: Set GitLab initial root password
           lineinfile:
@@ -35,8 +75,9 @@
           blockinfile:
             path: /etc/gitlab/gitlab.rb
             block: |
-              gitlab_rails['initial_license_file'] = '{{ gitlab_license_file_path }}'
+              gitlab_rails['initial_license_file'] = '/etc/gitlab/license'
             marker: "# {mark} ANSIBLE MANAGED BLOCK LICENSE"
+          when: gitlab_license_file_path is defined and gitlab_license_file_path != ""
 
         - name: Configure GitLab SMTP
           blockinfile:
