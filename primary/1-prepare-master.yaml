@@ -1,39 +1,82 @@
 ---
 - name: Prepare RHEL 8 and Install GitLab EE from Local Repository
-  hosts: all
-  remote_user: user
+  hosts: primary_gitlab_server
+  remote_user: mostafa
   become: yes
-  become_method: sudo  
+  become_method: sudo
   vars_files:
     - vars/main.yml
 
   tasks:
+    - name: Check system hardware prerequisites and installing package dependency
+      block:
+        - name: Check RAM
+          assert:
+            that: ansible_memtotal_mb >= 8192
+            fail_msg: "Insufficient RAM. At least 8 GB of RAM is required."
+
+        - name: Check total CPU cores
+          assert:
+            that: ansible_processor_vcpus >= 4
+            fail_msg: "Insufficient CPU cores. At least 4 CPU cores are required."
+
+        - name: Install required packages
+          dnf:
+            name:
+              - firewalld
+              - expect
+              - curl
+              - policycoreutils
+              - openssh-server
+              - openssh-clients
+              - postfix
+              - vim
+              - wget
+              - bash-completion
+              - tuned
+              - net-tools
+              - jq
+              - policycoreutils-python-utils
+            state: present
+
+    - name: Ensure firewalld is enabled and running
+      block:
+        - name: Ensure firewalld is enabled and running
+          systemd:
+            name: firewalld
+            state: started
+            enabled: yes
+
+        - name: Configure firewall rules
+          firewalld:
+            service: "{{ item }}"
+            permanent: yes
+            state: enabled
+            immediate: yes
+          loop:
+            - http
+            - https
+            - ssh
+            - postgresql
+
     - block:
+        - name: Check if SELinux is disabled
+          command: getenforce
+          register: selinux_status
+          changed_when: false
+
         - name: Set SELinux to permissive mode
           selinux:
             policy: targeted
             state: permissive
+          when: selinux_status.stdout != "Disabled"
 
         - name: Ensure SELinux is permissive on reboot
           lineinfile:
             path: /etc/selinux/config
             regexp: '^SELINUX='
             line: 'SELINUX=permissive'
-
-        - name: Ensure required packages are installed
-          package:
-            name: "{{ item }}"
-            state: present
-          loop:
-            - vim
-            - wget
-            - bash-completion
-            - tuned
-            - net-tools
-            - jq
-            - curl
-            - policycoreutils-python-utils
-            - postfix
+          when: selinux_status.stdout != "Disabled"
 
         - name: Ensure tuned service is enabled and running
           systemd:
@@ -41,14 +84,14 @@
             state: started
             enabled: yes
 
-        - name: Set the active tuned profile to performance
-          command: tuned-adm profile performance
+        - name: Check current tuned profile
+          command: tuned-adm active
+          register: tuned_profile
+          changed_when: false
 
-        - name: Ensure postfix is enabled and running
-          systemd:
-            name: postfix
-            state: started
-            enabled: yes
+        - name: Set the active tuned profile to throughput-performance if needed
+          command: tuned-adm profile throughput-performance
+          when: "'throughput-performance' not in tuned_profile.stdout"
 
         - name: Configure Postfix to use all network interfaces
           lineinfile:
@@ -56,30 +99,43 @@
             regexp: '^inet_interfaces ='
             line: 'inet_interfaces = all'
             create: yes
+          notify: Reload Postfix
 
-        - name: Reload Postfix to apply configuration changes
-          command: systemctl reload postfix
+        - name: Ensure postfix is enabled and running during reboots
+          systemd:
+            name: postfix
+            state: started
+            enabled: yes
 
-        - name: Download and install GitLab EE from local HTTP server
-          get_url:
-            url: "https://{{ http_server }}/{{ gitlab_rpm }}"
-            dest: "/tmp/{{ gitlab_rpm }}"
-            validate_certs: no
-          register: download_result
+        - name: Check if GitLab EE is installed
+          shell: rpm -q gitlab-ee
+          register: gitlab_installed
+          changed_when: false
+          failed_when: gitlab_installed.rc not in [0, 1]
 
-        - name: Install GitLab EE from downloaded RPM
-          yum:
-            name: "/tmp/{{ gitlab_rpm }}"
-            state: present
-            disable_gpg_check: yes
-          register: install_result
-          failed_when: install_result.rc != 0
+        - name: Download and install GitLab EE from local HTTP server if not installed
+          block:
+            - name: Download GitLab EE RPM
+              get_url:
+                url: "{{ http_server }}/{{ gitlab_rpm }}"
+                dest: "/tmp/{{ gitlab_rpm }}"
+                validate_certs: no
+              register: download_result
+              when: gitlab_installed.rc == 1
 
-        - name: Clean up downloaded RPM file
-          file:
-            path: "/tmp/{{ gitlab_rpm }}"
-            state: absent
-          when: install_result.rc == 0
+            - name: Install GitLab EE from downloaded RPM
+              yum:
+                name: "/tmp/{{ gitlab_rpm }}"
+                state: present
+                disable_gpg_check: yes
+              register: install_result
+              when: gitlab_installed.rc == 1
+
+            - name: Clean up downloaded RPM file
+              file:
+                path: "/tmp/{{ gitlab_rpm }}"
+                state: absent
+              when: install_result is succeeded
 
       rescue:
         - name: Set playbook status to FAILED
@@ -104,3 +160,7 @@
         - name: Set playbook status to SUCCESS if not already set
           set_fact:
             playbook_status: "{{ playbook_status | default('SUCCESS') }}"
+
+  handlers:
+    - name: Reload Postfix
+      command: systemctl reload postfix
