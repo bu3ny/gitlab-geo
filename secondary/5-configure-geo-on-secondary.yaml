@@ -1,0 +1,373 @@
+- name: Configure GitLab Geo on Secondary Server
+  hosts: secondary_gitlab_server
+  remote_user: mostafa
+  become: yes
+  become_method: sudo
+  vars_files:
+    - vars/main.yml
+  vars:
+    playbook_failed: false
+
+  tasks:
+    - name: Stop Puma
+      command: gitlab-ctl stop puma
+      register: stop_puma_result
+      failed_when: stop_puma_result.rc != 0
+
+    - name: Fail if unable to stop Puma
+      fail:
+        msg: "Failed to stop Puma."
+      when: stop_puma_result.rc != 0
+
+    - name: Stop Sidekiq
+      command: gitlab-ctl stop sidekiq
+      register: stop_sidekiq_result
+      failed_when: stop_sidekiq_result.rc != 0
+
+    - name: Fail if unable to stop Sidekiq
+      fail:
+        msg: "Failed to stop Sidekiq."
+      when: stop_sidekiq_result.rc != 0
+
+    - name: Check TCP connectivity to primary PostgreSQL server
+      command: gitlab-rake gitlab:tcp_check[{{ primary_site_ip }},5432]
+      register: tcp_check_result
+      failed_when: tcp_check_result.rc != 0
+
+    - name: Fail if unable to check TCP connectivity to primary PostgreSQL server
+      fail:
+        msg: "Failed to check TCP connectivity to primary PostgreSQL server."
+      when: tcp_check_result.rc != 0
+
+    - name: Install PostgreSQL certificate on secondary
+      command: |
+        install \
+          -D \
+          -o gitlab-psql \
+          -g gitlab-psql \
+          -m 0400 \
+          -T /tmp/server.crt ~gitlab-psql/.postgresql/root.crt
+      register: install_postgres_cert_result
+      failed_when: install_postgres_cert_result.rc != 0
+
+    - name: Fail if unable to install PostgreSQL certificate on secondary
+      fail:
+        msg: "Failed to install PostgreSQL certificate on secondary."
+      when: install_postgres_cert_result.rc != 0
+
+    - name: Test connection to primary PostgreSQL server
+      command: >
+        expect -c "
+        spawn sudo -u gitlab-psql /opt/gitlab/embedded/bin/psql --list -U gitlab_replicator -d dbname=gitlabhq_production sslmode=verify-ca -h {{ primary_site_ip }}
+        expect \"Password for user gitlab_replicator:\"
+        send \"{{ gitlab_replicator_password }}\\r\"
+        interact
+        "
+      register: test_pg_connection
+      failed_when: test_pg_connection.rc != 0
+
+    - name: Fail if unable to connect to primary PostgreSQL server
+      fail:
+        msg: "Failed to connect to primary PostgreSQL server."
+      when: test_pg_connection.rc != 0
+
+
+
+    - name: Restart sshd service
+      service:
+        name: sshd
+        state: restarted
+      register: restart_sshd_result
+
+    - name: Fail if unable to restart sshd service
+      fail:
+        msg: "Failed to restart sshd service."
+      when: restart_sshd_result.failed
+
+    - name: Test SSH connection
+      ping:
+      register: test_ssh_result
+      failed_when: test_ssh_result.ping != "pong"
+
+
+    - name: Configure GitLab Geo Secondary Role
+      blockinfile:
+        path: /etc/gitlab/gitlab.rb
+        block: |
+          roles(['geo_secondary_role'])
+        marker: "# {mark} ANSIBLE MANAGED BLOCK GEO SECONDARY"
+      register: configure_geo_secondary_result
+
+    - name: Fail if unable to configure GitLab Geo Secondary Role
+      fail:
+        msg: "Failed to configure GitLab Geo Secondary Role."
+      when: configure_geo_secondary_result.failed
+
+    - name: Configure PostgreSQL for Geo
+      blockinfile:
+        path: /etc/gitlab/gitlab.rb
+        block: |
+          postgresql['listen_address'] = '{{ secondary_site_ip }}'
+          postgresql['md5_auth_cidr_addresses'] = ['{{ secondary_site_ip }}/32']
+          postgresql['sql_replication_password'] = '{{ gitlab_replicator_password_md5 }}'
+          postgresql['sql_user_password'] = '{{ gitlab_db_password_md5 }}'
+          gitlab_rails['db_password'] = '{{ gitlab_db_password }}'
+        marker: "# {mark} ANSIBLE MANAGED BLOCK GEO POSTGRESQL"
+      register: configure_postgresql_geo_result
+
+    - name: Fail if unable to configure PostgreSQL for Geo
+      fail:
+        msg: "Failed to configure PostgreSQL for Geo."
+      when: configure_postgresql_geo_result.failed
+
+    - name: Reconfigure GitLab after setting Geo node name
+      command: gitlab-ctl reconfigure
+      register: reconfigure_gitlab_after_geo_node_name_result
+      failed_when: reconfigure_gitlab_after_geo_node_name_result.rc != 0
+
+    - name: Fail if unable to reconfigure GitLab after setting Geo node name
+      fail:
+        msg: "Failed to reconfigure GitLab after setting Geo node name."
+      when: reconfigure_gitlab_after_geo_node_name_result.rc != 0
+
+
+    - name: Restart PostgreSQL after configuration
+      command: gitlab-ctl restart postgresql
+      register: restart_postgresql_result
+      failed_when: restart_postgresql_result.rc != 0
+
+    - name: Fail if unable to restart PostgreSQL
+      fail:
+        msg: "Failed to restart PostgreSQL."
+      when: restart_postgresql_result.rc != 0
+
+
+
+    - name: Replicate the database
+      shell: |
+        /usr/bin/expect <<EOF
+        log_user 1
+        set timeout -1
+        spawn gitlab-ctl replicate-geo-database --slot-name={{ replication_slot_name }} --host={{ primary_site_ip }} --sslmode=verify-ca
+        expect {
+          "Confirmation:" {
+            send "replicate\r"
+            exp_continue
+          }
+          "Enter the password for gitlab_replicator@{{ primary_site_ip }}:" {
+            send "{{ gitlab_replicator_password }}\r"
+            exp_continue
+          }
+          eof
+        }
+        catch wait result
+        exit [lindex \$result 3]
+        EOF
+      register: replicate_db_result
+      failed_when: replicate_db_result.rc != 0
+
+    - name: Fail if unable to replicate the database
+      fail:
+        msg: "Failed to replicate the database."
+      when: replicate_db_result.rc != 0
+
+
+
+    - name: Reconfigure GitLab after replication
+      command: gitlab-ctl reconfigure
+      register: reconfigure_gitlab_after_replication_result
+      failed_when: reconfigure_gitlab_after_replication_result.rc != 0
+
+    - name: Fail if unable to reconfigure GitLab after setting Geo node name
+      fail:
+        msg: "Failed to reconfigure GitLab after setting Geo node name."
+      when: reconfigure_gitlab_after_replication_result.rc != 0
+
+    - name: Restart PostgreSQL after replication
+      command: gitlab-ctl restart postgresql
+      register: restart_postgresql_result
+      failed_when: restart_postgresql_result.rc != 0
+
+    - name: Fail if unable to restart PostgreSQL
+      fail:
+        msg: "Failed to restart PostgreSQL."
+      when: restart_postgresql_result.rc != 0
+
+    - name: Configure OpenSSH for fast lookup
+      blockinfile:
+        path: /etc/ssh/sshd_config
+        block: |
+          Match User git    # Apply the AuthorizedKeysCommands to the git user only
+            AuthorizedKeysCommand /opt/gitlab/embedded/service/gitlab-shell/bin/gitlab-shell-authorized-keys-check git %u %k
+            AuthorizedKeysCommandUser git
+          Match all    # End match, settings apply to all users again
+        marker: "# {mark} ANSIBLE MANAGED BLOCK FAST LOOKUP"
+      register: configure_ssh_fast_lookup_result
+
+    - name: Fail if OpenSSH fast lookup configuration task fails
+      fail:
+        msg: "OpenSSH fast lookup configuration task failed."
+      when: configure_ssh_fast_lookup_result.failed is defined and configure_ssh_fast_lookup_result.failed
+
+    - name: Configure Geo Node Name
+      lineinfile:
+        path: /etc/gitlab/gitlab.rb
+        line: "gitlab_rails['geo_node_name'] = '{{ geo_node_name }}'"
+        create: yes
+      register: configure_geo_node_name_result
+
+    - name: Fail if Geo Node Name configuration task fails
+      fail:
+        msg: "Geo Node Name configuration task failed."
+      when: configure_geo_node_name_result.failed is defined and configure_geo_node_name_result.failed
+
+    - name: Reconfigure GitLab after setting Geo node name
+      command: gitlab-ctl reconfigure
+      register: reconfigure_gitlab_after_geo_node_name_result
+      failed_when: reconfigure_gitlab_after_geo_node_name_result.rc != 0
+
+    - name: Fail if unable to reconfigure GitLab after setting Geo node name
+      fail:
+        msg: "Failed to reconfigure GitLab after setting Geo node name."
+      when: reconfigure_gitlab_after_geo_node_name_result.rc != 0
+
+
+
+    - name: Obtain GitLab OAuth2 token to Add secondary site to the primary node
+      uri:
+        url: "http://{{ primary_site_ip }}/oauth/token"
+        method: POST
+        body:
+          grant_type: "password"
+          username: "{{ gitlab_username }}"
+          password: "{{ gitlab_password }}"
+          scope: "api"
+        body_format: form-urlencoded
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+        validate_certs: no
+      register: oauth_response
+      failed_when:
+        - oauth_response.status != 200
+        - oauth_response.json.access_token is not defined
+
+    - name: Fail if unable to obtain GitLab OAuth2 token
+      fail:
+        msg: "Failed to obtain GitLab OAuth2 token."
+      when: oauth_response.status != 200 or oauth_response.json.access_token is not defined
+
+    - name: Set OAuth2 token fact
+      set_fact:
+        oauth_token: "{{ oauth_response.json.access_token }}"
+
+    - name: Debug OAuth2 token
+      debug:
+        var: oauth_token
+
+    - name: Add secondary site to the primary node
+      uri:
+        url: "http://{{ primary_site_ip }}/api/v4/geo_sites"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ oauth_token }}"
+        body_format: json
+        body:
+          name: "{{ geo_node_name }}"
+          url: "{{ gitlab_external_url }}"
+        validate_certs: no
+      register: add_secondary_site_result
+      failed_when: add_secondary_site_result.status != 201
+
+    - name: Fail if unable to add secondary site to the primary node
+      fail:
+        msg: "Failed to add secondary site to the primary node."
+      when: add_secondary_site_result.status != 201
+
+
+    - name: Obtain GitLab OAuth2 token to Disable writing to authorized_keys file via API
+      uri:
+        url: "http://{{ primary_site_ip }}/oauth/token"
+        method: POST
+        body:
+          grant_type: "password"
+          username: "{{ gitlab_username }}"
+          password: "{{ gitlab_password }}"
+          scope: "api"
+        body_format: form-urlencoded
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+        validate_certs: no
+      register: oauth_response
+      failed_when:
+        - oauth_response.status != 200
+        - oauth_response.json.access_token is not defined
+
+    - name: Fail if unable to obtain GitLab OAuth2 token
+      fail:
+        msg: "Failed to obtain GitLab OAuth2 token."
+      when: oauth_response.status != 200 or oauth_response.json.access_token is not defined
+
+    - name: Set OAuth2 token fact
+      set_fact:
+        oauth_token: "{{ oauth_response.json.access_token }}"
+
+    - name: Debug OAuth2 token
+      debug:
+        var: oauth_token
+
+    - name: Disable writing to authorized_keys file via API
+      uri:
+        url: "http://{{ primary_site_ip }}/api/v4/application/settings"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ oauth_token }}"
+        body_format: json
+        body:
+          authorized_keys_enabled: false
+        validate_certs: no
+      register: disable_authorized_keys_result
+      failed_when: disable_authorized_keys_result.status != 200
+
+    - name: Fail if unable to disable writing to authorized_keys file
+      fail:
+        msg: "Failed to disable writing to authorized_keys file."
+      when: disable_authorized_keys_result.status != 200
+
+
+    - name: Check Geo setup on secondary
+      command: gitlab-rake gitlab:geo:check
+      register: geo_check
+      failed_when:
+        - "'Database replication working? ... yes' not in geo_check.stdout"
+        - "'GitLab Geo is enabled ... yes' not in geo_check.stdout"
+        - "'HTTP/HTTPS repository cloning is enabled ... yes' not in geo_check.stdout"
+      ignore_errors: yes
+
+    - name: Set playbook_failed to true if Geo check fails
+      set_fact:
+        playbook_failed: true
+      when: geo_check.failed
+
+    - name: Check Geo status on secondary
+      command: gitlab-rake geo:status
+      register: geo_status
+      failed_when:
+        - geo_status.rc != 0
+      ignore_errors: yes
+
+    - name: Set playbook_failed to true if Geo status check fails
+      set_fact:
+        playbook_failed: true
+      when: geo_status.failed
+
+
+    - name: Restart services on secondary node
+      command: gitlab-ctl restart
+      register: restart_services_result
+      failed_when: restart_services_result.rc != 0
+      ignore_errors: yes
+
+    - name: Set playbook_failed to true if restart services fails
+      set_fact:
+        playbook_failed: true
+      when: restart_services_result.failed
