@@ -1,36 +1,32 @@
 # General Variables
-gitlab_external_url: "http://your-gitlab-url.com"
-gitlab_license_file_path: "/path/to/license/file"
-primary_site_ip: "primary_site_ip_here"
-secondary_site_ip: "secondary_site_ip_here"
+gitlab_external_url: "http://gitlab.example.com"
+gitlab_license_file_path: "{{ playbook_dir }}/files/license"
+primary_site_ip: "10.0.0.1"
+secondary_site_ip: "10.0.0.2"
 
 # LDAP Configuration
-ldap_host: "{{ vault_ldap_host }}"
-ldap_bind_dn: "{{ vault_ldap_bind_dn }}"
-ldap_password: "{{ vault_ldap_password }}"
-ldap_base: "{{ vault_ldap_base }}"
-ldap_group_base: "{{ vault_ldap_group_base }}"
-ldap_admin_group: "{{ vault_ldap_admin_group }}"
+ldap_host: "10.0.0.1"
+ldap_bind_dn: "cn=Directory Manager"
+ldap_password: "P@ssw0rd"
+ldap_base: "cn=users,cn=accounts,dc=linux,dc=example,dc=com"
 
 # SMTP Configuration
-smtp_address: "{{ vault_smtp_address }}"
-smtp_port: "{{ vault_smtp_port }}"
-smtp_user: "{{ vault_smtp_user }}"
-smtp_password: "{{ vault_smtp_password }}"
+smtp_address: "10.0.0.3"
+smtp_port: "25"
+smtp_user: "postmaster@example.com"
+smtp_password: "redhat"
 
-# Syslog Configuration
-syslog_server: "{{ vault_syslog_server }}"
 
 # Geo Configuration
-geo_node_name: "primary_geo_node_name_here"
+geo_node_name: "primary-gitlab.example.com"
 
 # Database Passwords
-gitlab_db_password: "your_db_password_here"
-gitlab_replicator_password: "your_replication_password_here"
+gitlab_db_password: "Password"
+gitlab_replicator_password: "Password"
 
 # HTTP Server Configuration for GitLab RPM
-http_server: "10.0.0.1"
-gitlab_rpm: "gitlab-ee-17.0.0-ee.0.el8.x86_64.rpm"
+http_server: "http://10.10.0.1"
+gitlab_rpm: "gitlab-ee-17.0.1-ee.0.el8.x86_64.rpm"
 
 # Admin Password
-gitlab_password: "your_admin_password_here"
+gitlab_password: "%3svFeSzNWo&Ww"
