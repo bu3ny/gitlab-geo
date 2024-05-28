@@ -1,0 +1,33 @@
+---
+- name: Copy files to the secondary node
+  hosts: secondary_gitlab_server
+  remote_user: mostafa
+  become: yes
+  become_method: sudo
+  vars_files:
+    - vars/main.yml
+
+  gather_facts: no
+  tasks:
+    - name: Copy Postgres certificate to remote host
+      copy:
+        src: /tmp/postgres_certificate_content.crt
+        dest: /tmp/server.crt
+
+    - name: Copy GitLab secrets to remote host
+      copy:
+        src: /tmp/gitlab-secrets.json
+        dest: /etc/gitlab/gitlab-secrets.json
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Copy SSH keys to remote host
+      copy:
+        src: "{{ item }}"
+        dest: /etc/ssh/
+        owner: root
+        group: root
+        mode: '0600'
+      with_fileglob:
+        - /tmp/ssh_keys/{{ primary_site_ip }}/*
