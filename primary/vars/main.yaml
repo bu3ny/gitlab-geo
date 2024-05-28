@@ -29,4 +29,4 @@ http_server: "http://10.10.0.1"
 gitlab_rpm: "gitlab-ee-17.0.1-ee.0.el8.x86_64.rpm"
 
 # Admin Password
-gitlab_password: "%3svFeSzNWo&Ww"
+gitlab_password: "password"
