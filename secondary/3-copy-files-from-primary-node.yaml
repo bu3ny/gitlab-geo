@@ -1,0 +1,50 @@
+---
+- name: Configure GitLab Geo and Database Settings on Primary Server
+  hosts: primary_gitlab_server
+  remote_user: mostafa
+  become: yes
+  become_method: sudo
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+    - name: Verify SSH host keys exist on primary server
+      find:
+        paths: /etc/ssh
+        patterns: "ssh_host_*_key*"
+      register: ssh_keys_check
+      failed_when: ssh_keys_check.matched == 0
+
+    - name: Debug SSH host keys existence on primary server
+      debug:
+        var: ssh_keys_check.files
+
+    - name: Fetch SSH host keys from primary to control node
+      fetch:
+        src: "{{ item.path }}"
+        dest: "/tmp/ssh_keys/{{ inventory_hostname }}/"
+        flat: yes
+      loop: "{{ ssh_keys_check.files }}"
+      register: fetch_ssh_keys_result
+      failed_when: fetch_ssh_keys_result is failed
+
+    - name: Fail if unable to fetch SSH host keys from primary to control node
+      fail:
+        msg: "Failed to fetch SSH host keys from primary to control node."
+      when: fetch_ssh_keys_result is failed
+
+    - name: Copy PostgreSQL certificate to control node
+      fetch:
+        src: /var/opt/gitlab/postgresql/data/server.crt
+        dest: "/tmp/postgres_certificate_content.crt"
+        flat: yes
+      register: fetch_postgres_cert_to_control_result
+      failed_when: fetch_postgres_cert_to_control_result is failed
+
+    - name: Copy gitlab-secrets.json to control node
+      fetch:
+        src: /etc/gitlab/gitlab-secrets.json
+        dest: "/tmp/gitlab-secrets.json"
+        flat: yes
+      register: fetch_gitlab_secrets_to_control_result
+      failed_when: fetch_gitlab_secrets_to_control_result is failed
