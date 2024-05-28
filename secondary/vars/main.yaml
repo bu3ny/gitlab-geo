@@ -30,7 +30,7 @@ gitlab_rpm: "gitlab-ee-17.0.1-ee.0.el8.x86_64.rpm"
 
 # Admin Password
 gitlab_username: "root"
-gitlab_password: "%3svFeSzNWo&Ww"
+gitlab_password: "password"
 
 gitlab_db_password_md5: "hash"
 gitlab_replicator_password_md5: "hash"
