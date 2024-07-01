@@ -1,4 +1,5 @@
 # General Variables
+# Change the below creds (User/Pass) - Only use strong ones and avoid any password with $ char as shell might not be able to interpret it correctly.
 gitlab_external_url: "http://gitlab.example.com"
 primary_site_ip: "10.0.0.1"
 secondary_site_ip: "10.0.0.2"
